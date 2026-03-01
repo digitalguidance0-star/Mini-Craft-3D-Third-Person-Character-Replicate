@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Mini Craft</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { overflow: hidden; background: #87CEEB; font-family: 'Courier New', monospace; }
+  canvas { display: block; }
+
+  #hud {
+    position: fixed; top: 16px; left: 50%; transform: translateX(-50%);
+    background: rgba(0,0,0,0.5); color: #fff; padding: 6px 20px;
+    border-radius: 4px; font-size: 13px; letter-spacing: 1px;
+    border: 1px solid rgba(255,255,255,0.15); pointer-events: none;
+    white-space: nowrap;
+  }
+
+  #controls-hint {
+    position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%);
+    background: rgba(0,0,0,0.45); color: #ddd; padding: 6px 18px;
+    border-radius: 4px; font-size: 12px; letter-spacing: 1px;
+    border: 1px solid rgba(255,255,255,0.1); pointer-events: none;
+  }
+
+  #crosshair {
+    position: fixed; top: 50%; left: 50%; transform: translate(-50%,-50%);
+    width: 20px; height: 20px; pointer-events: none;
+  }
+  #crosshair::before, #crosshair::after {
+    content: ''; position: absolute; background: rgba(255,255,255,0.85);
+  }
+  #crosshair::before { width: 2px; height: 100%; left: 50%; transform: translateX(-50%); }
+  #crosshair::after  { height: 2px; width: 100%; top: 50%; transform: translateY(-50%); }
+
+  #keys {
+    position: fixed; bottom: 52px; left: 50%; transform: translateX(-50%);
+    display: flex; flex-direction: column; align-items: center; gap: 3px;
+    pointer-events: none;
+  }
+  .key-row { display: flex; gap: 3px; }
+  .key {
+    width: 28px; height: 28px; background: rgba(0,0,0,0.4);
+    border: 1px solid rgba(255,255,255,0.2); border-radius: 4px;
+    color: #fff; font-size: 11px; display: flex; align-items: center;
+    justify-content: center; font-family: 'Courier New', monospace;
+    transition: background 0.1s, border-color 0.1s;
+  }
+  .key.active { background: rgba(255,255,255,0.28); border-color: rgba(255,255,255,0.7); }
+</style>
+</head>
+<body>
+<div id="hud">⛏️ MINI CRAFT &nbsp;|&nbsp; WASD to move · Mouse to orbit · Scroll to zoom</div>
+<div id="crosshair"></div>
+
+<div id="keys">
+  <div class="key-row"><div class="key" id="key-w">W</div></div>
+  <div class="key-row">
+    <div class="key" id="key-a">A</div>
+    <div class="key" id="key-s">S</div>
+    <div class="key" id="key-d">D</div>
+  </div>
+</div>
+<div id="controls-hint">WASD · move &nbsp;|&nbsp; Mouse drag · orbit &nbsp;|&nbsp; Scroll · zoom</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128/examples/js/controls/OrbitControls.js"></script>
+<script>
+// ─── Scene ────────────────────────────────────────────────────────────────────
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x87CEEB);
+scene.fog = new THREE.Fog(0x87CEEB, 45, 90);
+
+const camera = new THREE.PerspectiveCamera(60, innerWidth / innerHeight, 0.1, 200);
+camera.position.set(0, 6, 10);
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(devicePixelRatio);
+renderer.setSize(innerWidth, innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+// ─── Lighting ─────────────────────────────────────────────────────────────────
+const sun = new THREE.DirectionalLight(0xfffde7, 1.3);
+sun.position.set(20, 35, 15);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+sun.shadow.camera.left = sun.shadow.camera.bottom = -35;
+sun.shadow.camera.right = sun.shadow.camera.top = 35;
+sun.shadow.camera.far = 100;
+scene.add(sun);
+scene.add(new THREE.AmbientLight(0x88aacc, 0.65));
+
+// ─── Ground ───────────────────────────────────────────────────────────────────
+const ground = new THREE.Mesh(
+  new THREE.PlaneGeometry(70, 70),
+  new THREE.MeshLambertMaterial({ color: 0x3a7d44 })
+);
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+const grid = new THREE.GridHelper(70, 70, 0x2d6035, 0x2d6035);
+grid.material.opacity = 0.18;
+grid.material.transparent = true;
+scene.add(grid);
+
+// ─── Random Blocks ────────────────────────────────────────────────────────────
+const palette = [0x888888, 0x8B5E3C, 0x6B4226, 0xE2C97A, 0x9E9E9E, 0x4CAF50, 0x5B8CFF, 0xD95F2B];
+const ri = (lo, hi) => Math.floor(Math.random() * (hi - lo + 1)) + lo;
+const blockGeo = new THREE.BoxGeometry(1, 1, 1);
+
+for (let i = 0; i < 35; i++) {
+  const mat = new THREE.MeshLambertMaterial({ color: palette[ri(0, palette.length - 1)] });
+  const h = ri(1, 4);
+  const x = ri(-30, 30);
+  const z = ri(-30, 30);
+  if (Math.abs(x) < 4 && Math.abs(z) < 4) continue;
+  for (let j = 0; j < h; j++) {
+    const m = new THREE.Mesh(blockGeo, mat);
+    m.position.set(x, 0.5 + j, z);
+    m.castShadow = true;
+    m.receiveShadow = true;
+    scene.add(m);
+  }
+}
+
+// ─── Character Model ──────────────────────────────────────────────────────────
+// Blocky Minecraft-style humanoid using BoxGeometry parts
+
+const MAT = {
+  skin:  new THREE.MeshLambertMaterial({ color: 0xFFCC88 }),
+  shirt: new THREE.MeshLambertMaterial({ color: 0x2255CC }),
+  pants: new THREE.MeshLambertMaterial({ color: 0x1A2D6B }),
+  hair:  new THREE.MeshLambertMaterial({ color: 0x2B1200 }),
+  shoe:  new THREE.MeshLambertMaterial({ color: 0x111111 }),
+  eye:   new THREE.MeshLambertMaterial({ color: 0x0a0a0a }),
+  pupil: new THREE.MeshLambertMaterial({ color: 0x3366FF }),
+  mouth: new THREE.MeshLambertMaterial({ color: 0x993322 }),
+  nose:  new THREE.MeshLambertMaterial({ color: 0xEEAA77 }),
+  belt:  new THREE.MeshLambertMaterial({ color: 0x8B5E1A }),
+  buckle:new THREE.MeshLambertMaterial({ color: 0xCCAA33 }),
+};
+
+function mkBox(w, h, d, mat, px=0, py=0, pz=0) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+  m.position.set(px, py, pz);
+  m.castShadow = true;
+  m.receiveShadow = true;
+  return m;
+}
+
+const player = new THREE.Group();
+
+// ── Torso ──────────────────────────────────
+const torso = mkBox(0.80, 1.0, 0.48, MAT.shirt, 0, 1.5, 0);
+const belt  = mkBox(0.82, 0.13, 0.50, MAT.belt,  0, 1.06, 0);
+const buckle= mkBox(0.16, 0.12, 0.52, MAT.buckle,0, 1.06, 0);
+player.add(torso, belt, buckle);
+
+// ── Head ───────────────────────────────────
+const head  = mkBox(0.80, 0.80, 0.80, MAT.skin, 0, 2.35, 0);
+// Hair top
+const hairTop  = mkBox(0.82, 0.22, 0.82, MAT.hair, 0, 2.76, 0);
+// Hair back/sides fringe
+const hairBack = mkBox(0.82, 0.50, 0.10, MAT.hair, 0, 2.45,-0.45);
+const hairSideL= mkBox(0.10, 0.52, 0.72, MAT.hair,-0.46, 2.45, 0);
+const hairSideR= mkBox(0.10, 0.52, 0.72, MAT.hair, 0.46, 2.45, 0);
+// Face features
+const eyeL  = mkBox(0.14, 0.12, 0.06, MAT.eye,  -0.20, 2.42, 0.41);
+const eyeR  = mkBox(0.14, 0.12, 0.06, MAT.eye,   0.20, 2.42, 0.41);
+const pupilL= mkBox(0.07, 0.07, 0.06, MAT.pupil,-0.20, 2.40, 0.42);
+const pupilR= mkBox(0.07, 0.07, 0.06, MAT.pupil, 0.20, 2.40, 0.42);
+const nose  = mkBox(0.09, 0.09, 0.08, MAT.nose,  0,    2.28, 0.43);
+const mouth = mkBox(0.26, 0.07, 0.06, MAT.mouth, 0,    2.16, 0.41);
+player.add(head, hairTop, hairBack, hairSideL, hairSideR, eyeL, eyeR, pupilL, pupilR, nose, mouth);
+
+// ── Arms ───────────────────────────────────
+// Left arm (pivot at shoulder)
+const leftArm = new THREE.Group();
+leftArm.position.set(-0.56, 2.25, 0);
+leftArm.add(mkBox(0.31, 0.45, 0.31, MAT.shirt, 0, -0.22, 0));   // sleeve
+leftArm.add(mkBox(0.29, 0.48, 0.29, MAT.skin,  0, -0.62, 0));   // forearm/hand
+player.add(leftArm);
+
+const rightArm = new THREE.Group();
+rightArm.position.set(0.56, 2.25, 0);
+rightArm.add(mkBox(0.31, 0.45, 0.31, MAT.shirt, 0, -0.22, 0));
+rightArm.add(mkBox(0.29, 0.48, 0.29, MAT.skin,  0, -0.62, 0));
+player.add(rightArm);
+
+// ── Legs ───────────────────────────────────
+const leftLeg = new THREE.Group();
+leftLeg.position.set(-0.22, 1.02, 0);
+leftLeg.add(mkBox(0.35, 0.75, 0.35, MAT.pants, 0, -0.375, 0));
+leftLeg.add(mkBox(0.37, 0.22, 0.42, MAT.shoe,  0, -0.80,  0.04));
+player.add(leftLeg);
+
+const rightLeg = new THREE.Group();
+rightLeg.position.set(0.22, 1.02, 0);
+rightLeg.add(mkBox(0.35, 0.75, 0.35, MAT.pants, 0, -0.375, 0));
+rightLeg.add(mkBox(0.37, 0.22, 0.42, MAT.shoe,  0, -0.80,  0.04));
+player.add(rightLeg);
+
+player.position.set(0, 0, 0);
+scene.add(player);
+
+// ─── Shadow blob under player ─────────────────────────────────────────────────
+const shadowBlob = new THREE.Mesh(
+  new THREE.CircleGeometry(0.45, 12),
+  new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.25 })
+);
+shadowBlob.rotation.x = -Math.PI / 2;
+shadowBlob.position.y = 0.01;
+scene.add(shadowBlob);
+
+// ─── OrbitControls ────────────────────────────────────────────────────────────
+const controls = new THREE.OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.08;
+controls.minDistance   = 3;
+controls.maxDistance   = 30;
+controls.maxPolarAngle = Math.PI / 2 - 0.04;
+controls.target.copy(player.position).add(new THREE.Vector3(0, 1.5, 0));
+
+// ─── Input ────────────────────────────────────────────────────────────────────
+const heldKeys = {};
+const keyAlias = { arrowup:'w', arrowdown:'s', arrowleft:'a', arrowright:'d' };
+
+addEventListener('keydown', e => {
+  const k = keyAlias[e.key.toLowerCase()] || e.key.toLowerCase();
+  heldKeys[k] = true;
+  refreshKeyUI();
+});
+addEventListener('keyup', e => {
+  const k = keyAlias[e.key.toLowerCase()] || e.key.toLowerCase();
+  heldKeys[k] = false;
+  refreshKeyUI();
+});
+
+function refreshKeyUI() {
+  ['w','a','s','d'].forEach(k => {
+    document.getElementById('key-' + k)?.classList.toggle('active', !!heldKeys[k]);
+  });
+}
+
+// ─── Game Loop ────────────────────────────────────────────────────────────────
+const SPEED   = 5.5;
+const camDir  = new THREE.Vector3();
+const camRight= new THREE.Vector3();
+const moveDir = new THREE.Vector3();
+let walkT     = 0;
+const clock   = new THREE.Clock();
+
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+
+  // Camera forward projected on XZ
+  camera.getWorldDirection(camDir);
+  camDir.y = 0;
+  camDir.normalize();
+  camRight.crossVectors(camDir, new THREE.Vector3(0, 1, 0)).normalize();
+
+  moveDir.set(0, 0, 0);
+  if (heldKeys['w']) moveDir.addScaledVector(camDir,    1);
+  if (heldKeys['s']) moveDir.addScaledVector(camDir,   -1);
+  if (heldKeys['a']) moveDir.addScaledVector(camRight, -1);
+  if (heldKeys['d']) moveDir.addScaledVector(camRight,  1);
+
+  const moving = moveDir.lengthSq() > 0.001;
+
+  if (moving) {
+    moveDir.normalize();
+    player.position.addScaledVector(moveDir, SPEED * dt);
+    player.position.x = Math.max(-32, Math.min(32, player.position.x));
+    player.position.z = Math.max(-32, Math.min(32, player.position.z));
+
+    // Face movement direction (smooth)
+    const targetY = Math.atan2(moveDir.x, moveDir.z);
+    let diff = targetY - player.rotation.y;
+    while (diff >  Math.PI) diff -= Math.PI * 2;
+    while (diff < -Math.PI) diff += Math.PI * 2;
+    player.rotation.y += diff * 14 * dt;
+
+    walkT += dt * 9;
+  } else {
+    walkT *= 0.80; // decelerate cycle
+  }
+
+  // Limb animation
+  const sw = Math.sin(walkT) * 0.60;
+  leftLeg.rotation.x    =  sw;
+  rightLeg.rotation.x   = -sw;
+  leftArm.rotation.x    = -sw;
+  rightArm.rotation.x   =  sw;
+
+  // Body bob
+  player.position.y = moving ? Math.abs(Math.sin(walkT)) * 0.07 : 0;
+
+  // Shadow tracks player
+  shadowBlob.position.x = player.position.x;
+  shadowBlob.position.z = player.position.z;
+
+  // Camera target follows player
+  const lookTarget = player.position.clone().add(new THREE.Vector3(0, 1.5, 0));
+  controls.target.lerp(lookTarget, 0.12);
+  controls.update();
+
+  renderer.render(scene, camera);
+}
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+animate();
+</script>
+</body>
+</html>
